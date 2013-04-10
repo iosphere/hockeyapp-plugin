@@ -17,6 +17,7 @@ import org.apache.http.entity.mime.content.FileBody;
 import org.apache.http.entity.mime.content.StringBody;
 import org.apache.http.impl.client.DefaultHttpClient;
 import org.apache.http.message.BasicNameValuePair;
+import org.jenkinsci.plugins.gitclient.Git;
 import org.json.simple.parser.JSONParser;
 import org.kohsuke.stapler.DataBoundConstructor;
 import org.kohsuke.stapler.StaplerRequest;
@@ -25,13 +26,16 @@ import org.kohsuke.stapler.export.Exported;
 import hudson.EnvVars;
 import hudson.Extension;
 import hudson.FilePath;
+import hudson.FilePath.FileCallable;
 import hudson.Launcher;
 import hudson.Util;
 import hudson.model.Action;
 import hudson.model.BuildListener;
 import hudson.model.Result;
+import hudson.model.TaskListener;
 import hudson.model.AbstractBuild;
 import hudson.model.AbstractProject;
+import hudson.remoting.VirtualChannel;
 import hudson.scm.ChangeLogSet.Entry;
 import hudson.tasks.BuildStepDescriptor;
 import hudson.tasks.BuildStepMonitor;
@@ -140,19 +144,10 @@ public class HockeyappRecorder extends Recorder {
 			httpPost.setHeader("X-HockeyAppToken", apiToken);
 			MultipartEntity entity = new MultipartEntity();
 			if (useChangelog) {
-			//StringBuilder sb = new StringBuilder(super.buildCompletionMessage(publisher,build,listener));
-			StringBuilder sb = new StringBuilder();
-			 if (!build.getChangeSet().isEmptySet()) {
-		            boolean hasManyChangeSets = build.getChangeSet().getItems().length > 1;
-		            for (Entry entry : build.getChangeSet()) {
-		                sb.append("\n");
-		                if (hasManyChangeSets) {
-		                    sb.append("* ");
-		                }
-		                sb.append(entry.getAuthor()).append(": ").append(entry.getMsg());
-		            }
-		        }
-			 entity.addPart("notes", new StringBody(sb.toString()));
+			    String notes = Util.fixEmptyAndTrim(getChangelog(build));
+			    if (notes != null) {
+			        entity.addPart("notes", new StringBody(notes));
+			    }
 			} else if (buildNotes != null) {
 			    entity.addPart("notes", new StringBody(vars.expand(buildNotes)));
 			}
@@ -241,6 +236,45 @@ public class HockeyappRecorder extends Recorder {
 
 		return true;
 	}
+
+    @SuppressWarnings("serial")
+    private static String getChangelog(AbstractBuild<?, ?> build) throws IOException,
+            InterruptedException {
+        // If we were built from a git tag, use the tag's commit message as the release notes
+        final String tag = getBranchForBuild(build);
+        if (tag != null) {
+            return build.getWorkspace().act(new FileCallable<String>() {
+                public String invoke(File f, VirtualChannel channel) {
+                    return Git.with(TaskListener.NULL, null).in(f).getClient().getTagMessage(tag);
+                }
+            });
+        }
+
+        // Otherwise, use the default behaviour of gathering the SCM changelog for this build
+        StringBuilder sb = new StringBuilder();
+        if (!build.getChangeSet().isEmptySet()) {
+            boolean hasManyChangeSets = build.getChangeSet().getItems().length > 1;
+            for (Entry entry : build.getChangeSet()) {
+                sb.append("\n");
+                if (hasManyChangeSets) {
+                    sb.append("* ");
+                }
+                sb.append(entry.getAuthor()).append(": ").append(entry.getMsg());
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String getBranchForBuild(AbstractBuild<?, ?> build) throws IOException,
+            InterruptedException {
+        String tag = null;
+        String branch = build.getEnvironment(TaskListener.NULL).get("GIT_BRANCH");
+        if (branch != null && branch.contains("/tags/")) {
+            int index = branch.indexOf("/tags/");
+            tag = branch.substring(index + "/tags/".length());
+        }
+        return tag;
+    }
 
 	private static File getFileLocally(FilePath workingDir, String strFile,
 			File tempDir) throws IOException, InterruptedException {
