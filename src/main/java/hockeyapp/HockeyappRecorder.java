@@ -102,6 +102,13 @@ public class HockeyappRecorder extends Recorder {
 			return false;
 
 		listener.getLogger().println(Messages.UPLOADING_TO_HOCKEYAPP());
+
+		// Check first whether a file was configured
+		if (filePath == null) {
+			listener.getLogger().println(Messages.APP_FILE_MISSING());
+			return false;
+		}
+
 		File tempDir = null;
 		try {
 			EnvVars vars = build.getEnvironment(listener);
